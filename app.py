@@ -1,5 +1,3 @@
-
-import os
 import re
 from io import BytesIO
 from datetime import date
@@ -8,155 +6,354 @@ import requests
 import pandas as pd
 import streamlit as st
 
+
 st.set_page_config(
     page_title="SAP ABAP Job Monitor",
-    page_icon="🔎",
+    page_icon="💼",
     layout="wide"
 )
 
-st.title("🔎 SAP ABAP Job Monitor")
-st.write("Hyderabad | Remote | Hybrid | 5 Years Experience")
+st.title("💼 SAP ABAP Job Monitor")
+st.caption("Hyderabad + Remote/Hybrid SAP ABAP opportunities")
+
+
+# ---------------------------------------------------------
+# SEARCH QUERIES
+# ---------------------------------------------------------
 
 QUERIES = [
-    "SAP ABAP Hyderabad 5 years jobs",
-    "SAP ABAP Hyderabad remote jobs",
-    "SAP ABAP Hyderabad hybrid jobs",
-    "SAP S4HANA ABAP Hyderabad jobs",
-    "SAP RAP developer Hyderabad jobs",
-    "SAP ABAP remote India jobs",
-    "SAP ABAP Deloitte PwC EY KPMG Hyderabad",
-    "SAP ABAP product companies Hyderabad"
-]
-
-COLUMNS = [
-    "Date Found",
-    "Company",
-    "Role",
-    "Location",
-    "Work Model",
-    "Job Type",
-    "Experience",
-    "Job Link",
-    "Description"
+    '"SAP ABAP" Hyderabad jobs 5 years',
+    '"SAP ABAP Developer" Hyderabad jobs',
+    '"SAP ABAP" Hyderabad remote jobs',
+    '"SAP ABAP" Hyderabad hybrid jobs',
+    '"SAP S/4HANA ABAP" Hyderabad jobs',
+    '"SAP RAP" Hyderabad developer jobs',
+    '"SAP ABAP" remote India jobs',
+    '"SAP ABAP" Hyderabad Deloitte',
+    '"SAP ABAP" Hyderabad PwC',
+    '"SAP ABAP" Hyderabad EY',
+    '"SAP ABAP" Hyderabad KPMG',
+    '"SAP ABAP" Hyderabad product company',
 ]
 
 
-def get_api_key():
-    return st.secrets.get(
-        "SERPER_API_KEY",
-        os.getenv("SERPER_API_KEY", "")
+# ---------------------------------------------------------
+# COMPANY DETECTION
+# ---------------------------------------------------------
+
+KNOWN_COMPANIES = [
+    "Deloitte",
+    "PwC",
+    "EY",
+    "KPMG",
+    "Accenture",
+    "IBM",
+    "SAP",
+    "Microsoft",
+    "Amazon",
+    "Google",
+    "Cognizant",
+    "Capgemini",
+    "Infosys",
+    "Wipro",
+    "TCS",
+    "Tech Mahindra",
+    "HCLTech",
+    "NTT DATA",
+    "EPAM",
+    "Genpact",
+    "DXC Technology",
+    "LTIMindtree",
+    "Mphasis",
+    "Oracle",
+    "Thomson Reuters",
+    "ArcelorMittal",
+    "Regal Rexnord",
+    "Hitachi",
+    "Bosch",
+    "Siemens",
+]
+
+
+def detect_company(title, snippet, link):
+    text = f"{title} {snippet} {link}"
+
+    # First check known companies
+    for company in KNOWN_COMPANIES:
+        if company.lower() in text.lower():
+            return company
+
+    # Try common title formats
+    patterns = [
+        r"\bat\s+([A-Z][A-Za-z0-9& .-]{2,50})",
+        r"\|\s*([A-Z][A-Za-z0-9& .-]{2,50})$",
+        r"-\s*([A-Z][A-Za-z0-9& .-]{2,50})$",
+    ]
+
+    for pattern in patterns:
+        match = re.search(pattern, title)
+        if match:
+            company = match.group(1).strip()
+            if len(company) < 60:
+                return company
+
+    # Try extracting company from domain
+    domain_match = re.search(
+        r"https?://(?:www\.)?([^/]+)",
+        link
     )
 
+    if domain_match:
+        domain = domain_match.group(1)
+
+        ignored = [
+            "google.com",
+            "linkedin.com",
+            "indeed.com",
+            "naukri.com",
+            "foundit.in",
+            "glassdoor.com",
+            "jobstreet.com",
+        ]
+
+        if domain not in ignored:
+            name = domain.split(".")[0]
+            return name.replace("-", " ").title()
+
+    return "Verify in listing"
+
+
+# ---------------------------------------------------------
+# ROLE CLEANING
+# ---------------------------------------------------------
+
+def clean_role(title):
+    role = title.strip()
+
+    # Remove common website suffixes
+    role = re.sub(
+        r"\s*[-|]\s*(LinkedIn|Indeed|Glassdoor|Naukri|Foundit).*$",
+        "",
+        role,
+        flags=re.IGNORECASE
+    )
+
+    return role[:150]
+
+
+# ---------------------------------------------------------
+# WORK MODEL
+# ---------------------------------------------------------
 
 def detect_work_model(text):
     text = text.lower()
 
-    if re.search(r"\bhybrid\b", text):
-        return "Hybrid"
-
-    if re.search(r"\bremote\b|\bwfh\b|work from home", text):
+    if any(x in text for x in [
+        "remote",
+        "work from home",
+        "wfh",
+        "fully remote"
+    ]):
         return "Remote / WFH"
 
-    if re.search(r"work from office|on.site", text):
+    if any(x in text for x in [
+        "hybrid",
+        "work from office and home"
+    ]):
+        return "Hybrid"
+
+    if any(x in text for x in [
+        "on-site",
+        "onsite",
+        "office",
+        "work from office"
+    ]):
         return "Office"
 
     return "Not specified"
 
 
+# ---------------------------------------------------------
+# JOB TYPE
+# ---------------------------------------------------------
+
 def detect_job_type(text):
     text = text.lower()
 
-    if re.search(r"\bcontract\b|\bcontractual\b", text):
+    if any(x in text for x in [
+        "contract",
+        "contractor",
+        "contractual"
+    ]):
         return "Contract"
 
-    if re.search(r"full.time|permanent", text):
+    if any(x in text for x in [
+        "full time",
+        "full-time",
+        "permanent"
+    ]):
         return "Full-time"
 
     return "Not specified"
 
 
+# ---------------------------------------------------------
+# EXPERIENCE
+# ---------------------------------------------------------
+
 def detect_experience(text):
-    pattern = (
-        r"\d+(?:\.\d+)?\s*[-–]\s*"
-        r"\d+(?:\.\d+)?\s*(?:years|yrs)"
-        r"|\d+(?:\.\d+)?\s*\+\s*(?:years|yrs)"
-    )
+    text = text.lower()
 
-    match = re.search(pattern, text, re.I)
+    patterns = [
+        r"(\d+)\s*(?:-|to)\s*(\d+)\s*years?",
+        r"(\d+)\+\s*years?",
+        r"(\d+)\s*years?",
+    ]
 
-    if match:
-        return match.group()
+    for pattern in patterns:
+        match = re.search(pattern, text)
+
+        if match:
+            if len(match.groups()) == 2:
+                return f"{match.group(1)}-{match.group(2)} years"
+
+            return f"{match.group(1)}+ years"
 
     return "Not specified"
 
 
-def search_jobs(api_key):
-    rows = []
+# ---------------------------------------------------------
+# SAP ABAP FILTER
+# ---------------------------------------------------------
+
+def is_relevant(title, snippet):
+    text = f"{title} {snippet}".lower()
+
+    keywords = [
+        "sap abap",
+        "abap developer",
+        "abap consultant",
+        "s/4hana abap",
+        "sap rap",
+        "rap developer",
+    ]
+
+    return any(keyword in text for keyword in keywords)
+
+
+# ---------------------------------------------------------
+# SERPER SEARCH
+# ---------------------------------------------------------
+
+def search_serper(query, api_key):
+
+    url = "https://google.serper.dev/search"
 
     headers = {
         "X-API-KEY": api_key,
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
     }
 
-    for query in QUERIES:
-        try:
-            response = requests.post(
-                "https://google.serper.dev/search",
-                headers=headers,
-                json={
-                    "q": query,
-                    "num": 20,
-                    "gl": "in"
-                },
-                timeout=30
-            )
+    payload = {
+        "q": query,
+        "num": 10,
+        "gl": "in",
+        "hl": "en",
+    }
 
-            response.raise_for_status()
-
-            results = response.json().get("organic", [])
-
-            for job in results:
-                title = job.get("title", "")
-                link = job.get("link", "")
-                snippet = job.get("snippet", "")
-
-                combined = f"{title} {snippet}"
-
-                if not re.search(
-                    r"\bABAP\b", combined, re.I
-                ):
-                    continue
-
-                rows.append({
-                    "Date Found": str(date.today()),
-                    "Company": "Verify in job listing",
-                    "Role": title,
-                    "Location": "Verify in job listing",
-                    "Work Model": detect_work_model(combined),
-                    "Job Type": detect_job_type(combined),
-                    "Experience": detect_experience(combined),
-                    "Job Link": link,
-                    "Description": snippet
-                })
-
-        except requests.RequestException as error:
-            st.warning(
-                f"Search failed for {query}: {error}"
-            )
-
-    if not rows:
-        return pd.DataFrame(columns=COLUMNS)
-
-    df = pd.DataFrame(rows)
-
-    df = df.drop_duplicates(
-        subset=["Job Link"]
+    response = requests.post(
+        url,
+        headers=headers,
+        json=payload,
+        timeout=30
     )
 
-    return df
+    response.raise_for_status()
 
+    return response.json()
+
+
+# ---------------------------------------------------------
+# COLLECT JOBS
+# ---------------------------------------------------------
+
+def collect_jobs(api_key):
+
+    jobs = []
+    seen_links = set()
+
+    for query in QUERIES:
+
+        try:
+            data = search_serper(query, api_key)
+
+        except Exception as e:
+            st.warning(f"Search failed for: {query}")
+            continue
+
+        results = data.get("organic", [])
+
+        for item in results:
+
+            title = item.get("title", "").strip()
+            link = item.get("link", "").strip()
+            snippet = item.get("snippet", "").strip()
+
+            if not title or not link:
+                continue
+
+            if link in seen_links:
+                continue
+
+            if not is_relevant(title, snippet):
+                continue
+
+            seen_links.add(link)
+
+            combined_text = f"{title} {snippet}"
+
+            company = detect_company(
+                title,
+                snippet,
+                link
+            )
+
+            role = clean_role(title)
+
+            work_model = detect_work_model(
+                combined_text
+            )
+
+            job_type = detect_job_type(
+                combined_text
+            )
+
+            experience = detect_experience(
+                combined_text
+            )
+
+            jobs.append({
+                "Date Found": date.today().isoformat(),
+                "Company": company,
+                "Role": role,
+                "Location": "Hyderabad / India",
+                "Work Model": work_model,
+                "Job Type": job_type,
+                "Experience": experience,
+                "Job Link": link,
+                "Description": snippet,
+                "Search Query": query,
+            })
+
+    return pd.DataFrame(jobs)
+
+
+# ---------------------------------------------------------
+# EXCEL
+# ---------------------------------------------------------
 
 def create_excel(df):
+
     output = BytesIO()
 
     with pd.ExcelWriter(
@@ -170,85 +367,101 @@ def create_excel(df):
             sheet_name="SAP ABAP Jobs"
         )
 
-        worksheet = writer.sheets["SAP ABAP Jobs"]
+    output.seek(0)
 
-        worksheet.freeze_panes = "A2"
-        worksheet.auto_filter.ref = worksheet.dimensions
-
-        for column in worksheet.columns:
-            letter = column[0].column_letter
-            worksheet.column_dimensions[letter].width = 25
-
-    return output.getvalue()
+    return output
 
 
-st.subheader("Today's Job Search")
+# ---------------------------------------------------------
+# API KEY
+# ---------------------------------------------------------
+
+try:
+    API_KEY = st.secrets["SERPER_API_KEY"]
+
+except Exception:
+    API_KEY = ""
+
+
+if not API_KEY:
+
+    st.error(
+        "SERPER_API_KEY is not configured."
+    )
+
+    st.info(
+        "Add SERPER_API_KEY in Streamlit → "
+        "Manage app → Settings → Secrets."
+    )
+
+    st.stop()
+
+
+# ---------------------------------------------------------
+# RUN SEARCH
+# ---------------------------------------------------------
 
 if st.button(
     "🔎 Run Today's Job Search",
-    type="primary",
-    use_container_width=True
+    type="primary"
 ):
 
-    api_key = get_api_key()
+    with st.spinner(
+        "Searching SAP ABAP jobs..."
+    ):
 
-    if not api_key:
-        st.error(
-            "SERPER_API_KEY is missing. "
-            "Configure it in Streamlit Secrets."
+        df = collect_jobs(API_KEY)
+
+    if df.empty:
+
+        st.warning(
+            "No relevant jobs found."
         )
 
     else:
-        with st.spinner("Searching SAP ABAP jobs..."):
-            st.session_state["jobs"] = search_jobs(api_key)
 
+        st.session_state["jobs"] = df
+
+
+# ---------------------------------------------------------
+# DISPLAY RESULTS
+# ---------------------------------------------------------
 
 if "jobs" in st.session_state:
 
-    df = st.session_state["jobs"]
+    df = st.session_state["jobs"].copy()
 
-    col1, col2, col3 = st.columns(3)
+    st.success(
+        f"Found {len(df)} unique job links."
+    )
 
-    col1.metric(
-        "Jobs Found",
+    st.metric(
+        "Unique Job Links",
         len(df)
     )
 
-    col2.metric(
-        "Remote / Hybrid",
-        len(df[
-            df["Work Model"].isin([
-                "Remote / WFH",
-                "Hybrid"
-            ])
-        ])
-    )
+    st.subheader("🔎 Filters")
 
-    col3.metric(
-        "Unique Job Links",
-        df["Job Link"].nunique()
-    )
-
-    st.subheader("Job Results")
-
-    work_filter = st.multiselect(
+    work_models = st.multiselect(
         "Filter by Work Model",
-        options=[
+        [
             "Remote / WFH",
             "Hybrid",
             "Office",
-            "Not specified"
+            "Not specified",
         ],
         default=[
             "Remote / WFH",
             "Hybrid",
-            "Not specified"
+            "Not specified",
         ]
     )
 
     filtered = df[
-        df["Work Model"].isin(work_filter)
+        df["Work Model"].isin(work_models)
     ]
+
+    st.subheader("💼 Job Results")
 
     st.dataframe(
         filtered,
@@ -256,7 +469,7 @@ if "jobs" in st.session_state:
         hide_index=True,
         column_config={
             "Job Link": st.column_config.LinkColumn(
-                "Apply / View Job"
+                "Job Link"
             )
         }
     )
@@ -266,21 +479,12 @@ if "jobs" in st.session_state:
     st.download_button(
         label="⬇️ Download Excel",
         data=excel_file,
-        file_name=f"SAP_ABAP_Jobs_{date.today()}.xlsx",
-        mime=(
-            "application/vnd.openxmlformats-officedocument."
-            "spreadsheetml.sheet"
+        file_name=(
+            "SAP_ABAP_Hyderabad_Jobs_"
+            f"{date.today().isoformat()}.xlsx"
         ),
-        use_container_width=True
-    )
-
-    st.caption(
-        "Work model, experience and job type are extracted "
-        "from search snippets. Verify details on the "
-        "original job listing before applying."
-    )
-
-else:
-    st.info(
-        "Click Run Today's Job Search to find SAP ABAP jobs."
-    )
+        mime=(
+            "application/vnd.openxmlformats-"
+            "officedocument.spreadsheetml.sheet"
+        )
+)
